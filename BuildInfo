@@ -1,0 +1,1 @@
+python -m PyInstaller --onefile --name SyncApp --add-data "assets:assets" gui.py
