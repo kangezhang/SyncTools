@@ -11,7 +11,8 @@ class SyncClient:
         self.server_port = server_port
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.devices = {}
-        self.file_snapshots = self.scan_files()  # 初始化 file_snapshots 属性
+        self.file_snapshots = self.scan_files()
+        self.versions = {}  # 存储文件的版本信息
 
     def start_client(self):
         while True:
@@ -36,7 +37,9 @@ class SyncClient:
         else:
             with open(file_path, 'rb') as f:
                 file_data = f.read()
-            data = json.dumps({"action": action, "path": relative_path, "size": len(file_data)}).encode() + file_data
+            version_id = time.time()
+            self.save_version(file_path, version_id, file_data)
+            data = json.dumps({"action": action, "path": relative_path, "size": len(file_data), "version": version_id}).encode() + file_data
         self.client_socket.send(data)
         print(f"发送 {action} 文件：{relative_path}")
 
@@ -69,7 +72,9 @@ class SyncClient:
                     print(f"删除文件：{relative_path}")
                 else:
                     file_size = action_info["size"]
+                    version_id = action_info.get("version", None)
                     file_data = self.client_socket.recv(file_size)
+                    self.save_version(file_path, version_id, file_data)
                     with open(file_path, 'wb') as f:
                         f.write(file_data)
                     print(f"接收 {action} 文件：{relative_path}")
@@ -102,6 +107,29 @@ class SyncClient:
                 self.send_data("delete", file)
 
             self.file_snapshots = new_snapshots
+
+    def save_version(self, file_path, version_id, file_data):
+        if version_id is not None:
+            version_dir = os.path.join(self.sync_folder, ".versions", os.path.relpath(file_path, self.sync_folder))
+            if not os.path.exists(version_dir):
+                os.makedirs(version_dir)
+            version_file = os.path.join(version_dir, f"{version_id}.version")
+            with open(version_file, 'wb') as f:
+                f.write(file_data)
+            if file_path not in self.versions:
+                self.versions[file_path] = []
+            self.versions[file_path].append(version_id)
+
+    def get_versions(self, file_path):
+        return self.versions.get(file_path, [])
+
+    def restore_version(self, file_path, version_id):
+        version_dir = os.path.join(self.sync_folder, ".versions", os.path.relpath(file_path, self.sync_folder))
+        version_file = os.path.join(version_dir, f"{version_id}.version")
+        if os.path.exists(version_file):
+            with open(version_file, 'rb') as f:
+                return f.read()
+        return None
 
 if __name__ == '__main__':
     sync_folder = '/path/to/sync/folder'

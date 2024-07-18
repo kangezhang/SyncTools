@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, Menu
 import json
 import threading
 from client import SyncClient
@@ -79,6 +79,7 @@ class SyncApp:
         self.tree.heading("status", text="同步状态")
         self.tree.column("status", width=100, anchor="center")
         self.tree.grid(row=5, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
+        self.tree.bind("<Button-3>", self.show_context_menu)  # 绑定右键点击事件
         print("Treeview created")
         
         self.progress_var = tk.DoubleVar()
@@ -239,6 +240,39 @@ class SyncApp:
     def schedule_refresh(self):
         self.populate_file_list()
         self.root.after(5000, self.schedule_refresh)  # 每5秒刷新一次文件列表
+
+    def show_context_menu(self, event):
+        selected_item = self.tree.identify_row(event.y)
+        if selected_item:
+            self.tree.selection_set(selected_item)
+            file_path = self.tree.item(selected_item, "values")[0]
+
+            menu = Menu(self.root, tearoff=0)
+            menu.add_command(label="选择版本另存为", command=lambda: self.choose_version(file_path))
+            menu.post(event.x_root, event.y_root)
+
+    def choose_version(self, file_path):
+        versions = self.client.get_versions(file_path)
+        if not versions:
+            messagebox.showinfo("信息", "没有可用的版本。")
+            return
+
+        version = tk.simpledialog.askinteger("选择版本", "输入版本号 (1-{}):".format(len(versions)))
+        if version is None or version < 1 or version > len(versions):
+            messagebox.showwarning("警告", "无效的版本号。")
+            return
+
+        version_id = versions[version - 1]
+        version_data = self.client.restore_version(file_path, version_id)
+        if version_data is None:
+            messagebox.showwarning("警告", "无法恢复该版本。")
+            return
+
+        save_path = filedialog.asksaveasfilename(initialfile=os.path.basename(file_path))
+        if save_path:
+            with open(save_path, 'wb') as f:
+                f.write(version_data)
+            messagebox.showinfo("信息", "版本已成功保存。")
 
 if __name__ == '__main__':
     print("Running SyncApp...")  # 调试信息
