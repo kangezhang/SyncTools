@@ -100,6 +100,13 @@ class SyncApp:
         self.device_tree.grid(row=0, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
         print("Device treeview created")
 
+        drop_frame = ttk.Frame(root, padding="10", relief="solid", borderwidth=1)
+        drop_frame.grid(row=9, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
+        drop_label = ttk.Label(drop_frame, text="将文件拖拽到此处")
+        drop_label.grid(row=0, column=0, padx=10, pady=10)
+        ttk.Button(drop_frame, text="选择文件上传", command=self.select_files_to_upload).grid(row=1, column=0, padx=10, pady=10)
+        print("Drop frame created")
+
         root.grid_rowconfigure(5, weight=1)
         root.grid_columnconfigure(1, weight=1)
         print("Grid configured")
@@ -172,7 +179,7 @@ class SyncApp:
         if not hasattr(self, 'client_thread') or not self.client_thread.is_alive():
             self.client_thread = threading.Thread(target=self.client.start_client)
             self.client_thread.daemon = True
-            self.client_thread.start()
+            self.client_thread.start
             messagebox.showinfo("信息", "同步已启动！")
 
     def sync_local_folders(self):
@@ -273,6 +280,23 @@ class SyncApp:
             with open(save_path, 'wb') as f:
                 f.write(version_data)
             messagebox.showinfo("信息", "版本已成功保存。")
+
+    def drop(self, event):
+        file_paths = self.root.tk.splitlist(event.data)
+        for file_path in file_paths:
+            self.send_file_to_clients(file_path)
+
+    def select_files_to_upload(self):
+        file_paths = filedialog.askopenfilenames()
+        for file_path in file_paths:
+            self.send_file_to_clients(file_path)
+
+    def send_file_to_clients(self, file_path):
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
+        file_name = os.path.basename(file_path)
+        self.client.send_data_to_clients(file_name, file_data)
+        print(f"文件 {file_name} 已发送给所有在线客户端")
 
 if __name__ == '__main__':
     print("Running SyncApp...")  # 调试信息

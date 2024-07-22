@@ -1,11 +1,13 @@
-import socket
 import os
+import platform
+import socket
 import threading
 import time
 import json
 
+
 class SyncClient:
-    def __init__(self, sync_folder, server_host='127.0.0.1', server_port=5001):
+    def __init__(self, sync_folder, server_host="127.0.0.1", server_port=5001):
         self.sync_folder = sync_folder
         self.server_host = server_host
         self.server_port = server_port
@@ -26,7 +28,11 @@ class SyncClient:
                 watch_thread = threading.Thread(target=self.watch_files)
                 watch_thread.start()
                 break  # 成功连接后退出重试循环
-            except (ConnectionAbortedError, ConnectionResetError, ConnectionRefusedError) as e:
+            except (
+                ConnectionAbortedError,
+                ConnectionResetError,
+                ConnectionRefusedError,
+            ) as e:
                 print(f"连接中止：{e}")
                 time.sleep(5)  # 等待5秒后重试
 
@@ -34,52 +40,72 @@ class SyncClient:
         relative_path = os.path.relpath(file_path, self.sync_folder)
         if action == "delete":
             data = json.dumps({"action": action, "path": relative_path}).encode()
+            self.client_socket.send(data)
         else:
-            with open(file_path, 'rb') as f:
+            with open(file_path, "rb") as f:
                 file_data = f.read()
             version_id = time.time()
             self.save_version(file_path, version_id, file_data)
-            data = json.dumps({"action": action, "path": relative_path, "size": len(file_data), "version": version_id}).encode() + file_data
-        self.client_socket.send(data)
+            metadata = json.dumps(
+                {
+                    "action": action,
+                    "path": relative_path,
+                    "size": len(file_data),
+                    "version": version_id,
+                }
+            ).encode()
+            self.client_socket.sendall(metadata + b"\n" + file_data)
         print(f"发送 {action} 文件：{relative_path}")
+
+    def send_data_to_clients(self, file_name, file_data):
+        metadata = json.dumps(
+            {"action": "add", "path": file_name, "size": len(file_data)}
+        ).encode()
+        self.client_socket.sendall(metadata + b"\n" + file_data)
+        print(f"发送文件 {file_name} 给所有在线客户端")
 
     def receive_data(self):
         try:
             while True:
-                data = self.client_socket.recv(1024)
-                if not data:
-                    break
-                try:
-                    action_info = json.loads(data.decode())
-                    if 'status' in action_info.values():
-                        self.devices = action_info
-                        continue
-                except json.JSONDecodeError:
-                    print(f"接收到无效的JSON数据：{data}")
+                metadata = b""
+                while not metadata.endswith(b"\n"):
+                    metadata += self.client_socket.recv(1)
+                action_info = json.loads(metadata.decode())
+                if "status" in action_info.values():
+                    self.devices = action_info
                     continue
-                
-                if 'action' not in action_info:
-                    print(f"接收到的数据中缺少'action'键：{action_info}")
-                    continue
-                
+
                 action = action_info["action"]
                 relative_path = action_info["path"]
-                file_path = os.path.join(self.sync_folder, relative_path)
-                
+                if platform.system() == "Windows":
+                    download_path = os.path.join(
+                        os.environ["USERPROFILE"], "Downloads", relative_path
+                    )
+                else:
+                    download_path = os.path.join(
+                        os.path.expanduser("~/Downloads"), relative_path
+                    )
+
+                # 确保路径存在
+                os.makedirs(os.path.dirname(download_path), exist_ok=True)
+
                 if action == "delete":
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
+                    if os.path.exists(download_path):
+                        os.remove(download_path)
                     print(f"删除文件：{relative_path}")
                 else:
                     file_size = action_info["size"]
-                    version_id = action_info.get("version", None)
-                    file_data = self.client_socket.recv(file_size)
-                    self.save_version(file_path, version_id, file_data)
-                    with open(file_path, 'wb') as f:
+                    file_data = b""
+                    while len(file_data) < file_size:
+                        file_data += self.client_socket.recv(file_size - len(file_data))
+                    self.save_version(
+                        download_path, action_info.get("version", None), file_data
+                    )
+                    with open(download_path, "wb") as f:
                         f.write(file_data)
-                    print(f"接收 {action} 文件：{relative_path}")
-        except (ConnectionAbortedError, ConnectionResetError):
-            print(f"连接中断")
+                    print(f"接收并保存文件：{download_path}")
+        except (ConnectionAbortedError, ConnectionResetError) as e:
+            print(f"连接中断：{e}")
         finally:
             self.client_socket.close()
 
@@ -97,7 +123,12 @@ class SyncClient:
             new_snapshots = self.scan_files()
             deleted_files = set(self.file_snapshots.keys()) - set(new_snapshots.keys())
             added_files = set(new_snapshots.keys()) - set(self.file_snapshots.keys())
-            modified_files = {file for file in new_snapshots if file in self.file_snapshots and new_snapshots[file] != self.file_snapshots[file]}
+            modified_files = {
+                file
+                for file in new_snapshots
+                if file in self.file_snapshots
+                and new_snapshots[file] != self.file_snapshots[file]
+            }
 
             for file in added_files:
                 self.send_data("add", file)
@@ -110,11 +141,15 @@ class SyncClient:
 
     def save_version(self, file_path, version_id, file_data):
         if version_id is not None:
-            version_dir = os.path.join(self.sync_folder, ".versions", os.path.relpath(file_path, self.sync_folder))
+            version_dir = os.path.join(
+                self.sync_folder,
+                ".versions",
+                os.path.relpath(file_path, self.sync_folder),
+            )
             if not os.path.exists(version_dir):
                 os.makedirs(version_dir)
             version_file = os.path.join(version_dir, f"{version_id}.version")
-            with open(version_file, 'wb') as f:
+            with open(version_file, "wb") as f:
                 f.write(file_data)
             if file_path not in self.versions:
                 self.versions[file_path] = []
@@ -124,14 +159,17 @@ class SyncClient:
         return self.versions.get(file_path, [])
 
     def restore_version(self, file_path, version_id):
-        version_dir = os.path.join(self.sync_folder, ".versions", os.path.relpath(file_path, self.sync_folder))
+        version_dir = os.path.join(
+            self.sync_folder, ".versions", os.path.relpath(file_path, self.sync_folder)
+        )
         version_file = os.path.join(version_dir, f"{version_id}.version")
         if os.path.exists(version_file):
-            with open(version_file, 'rb') as f:
+            with open(version_file, "rb") as f:
                 return f.read()
         return None
 
-if __name__ == '__main__':
-    sync_folder = '/path/to/sync/folder'
+
+if __name__ == "__main__":
+    sync_folder = "/path/to/sync/folder"
     client = SyncClient(sync_folder)
     client.start_client()

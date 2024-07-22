@@ -29,13 +29,29 @@ class SyncServer:
     def handle_client(self, client_socket, client_address):
         try:
             while True:
-                data = client_socket.recv(1024)
-                if not data:
-                    break
-                print(f"收到数据：{data.decode()}")
-                self.broadcast(data, client_socket)
-        except (ConnectionAbortedError, ConnectionResetError):
-            print(f"连接中断：{client_address}")
+                metadata = b""
+                while not metadata.endswith(b'\n'):
+                    metadata += client_socket.recv(1)
+                action_info = json.loads(metadata.decode())
+                if 'status' in action_info.values():
+                    self.devices[client_address]['status'] = 'online'
+                    continue
+
+                action = action_info["action"]
+                relative_path = action_info["path"]
+                file_size = action_info["size"]
+                
+                if action == "delete":
+                    data = json.dumps(action_info).encode()
+                    self.broadcast(data, client_socket)
+                else:
+                    file_data = b""
+                    while len(file_data) < file_size:
+                        file_data += client_socket.recv(file_size - len(file_data))
+                    data = json.dumps(action_info).encode() + b'\n' + file_data
+                    self.broadcast(data, client_socket)
+        except (ConnectionAbortedError, ConnectionResetError, UnicodeDecodeError) as e:
+            print(f"连接中断：{e}")
         finally:
             self.clients.remove(client_socket)
             self.devices[client_address]['status'] = 'offline'
